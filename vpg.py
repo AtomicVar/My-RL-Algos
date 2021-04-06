@@ -1,13 +1,12 @@
 import gym
 import numpy as np
 import torch
-from gym.spaces import Box, Discrete
 from torch.optim import Adam
 
 from agent import Agent
-from policy import CategoricalPolicy, GaussianPolicy
+from policy import make_policy_for_env
 from utils import count_params, discounted_sum, normalize
-from valuefunc import VF
+from valuefunc import VNet
 
 
 def lossfunc_pi(logp, adv):
@@ -26,40 +25,17 @@ class VPG(Agent):
     """
 
     def __init__(self, env_name, pi_lr, v_lr, pi_hid, pi_l, v_hid, v_l, gamma, lam):
-        # 创建环境，并获得环境的状态 shape 以及动作 shape，用于确定神经网络输入输出的 shape
-        self.env = gym.make(env_name)
-
-        # 超参数
         self.gamma = gamma
         self.lam = lam
 
-        # 根据环境动作空间是连续还是离散，创建不同类型的策略网络
-        obs_dim = self.env.observation_space.shape[0]
-        if isinstance(self.env.action_space, Box):
-            self.pi = GaussianPolicy(
-                obs_dim=obs_dim,
-                act_dim=self.env.action_space.shape[0],
-                hidden_sizes=[pi_hid] * pi_l,
-            )
-        elif isinstance(self.env.action_space, Discrete):
-            self.pi = CategoricalPolicy(
-                obs_dim=obs_dim,
-                act_n=self.env.action_space.n,
-                hidden_sizes=[pi_hid] * pi_l,
-            )
-        else:
-            raise RuntimeError("Bad Env!")
+        self.env = gym.make(env_name)
+        self.pi = make_policy_for_env(self.env, pi_hid=pi_hid, pi_l=pi_l)
+        self.v = VNet(obs_dim=self.env.observation_space.shape[0], hidden_sizes=[v_hid] * v_l)
 
-        # 创建价值网络
-        self.v = VF(obs_dim, hidden_sizes=[v_hid] * v_l)
-
-        # 创建优化器
         self.pi_opt = Adam(self.pi.parameters(), pi_lr)
         self.v_opt = Adam(self.v.parameters(), v_lr)
 
-        # 输出额外信息
-        print(f"Policy Network parameters: {count_params(self.pi)}")
-        print(f"Value Network parameteters: {count_params(self.v)}")
+        self.print_number_of_params()
 
     def train(self, epochs, max_ep_len, log_freq):
         """
@@ -137,6 +113,10 @@ class VPG(Agent):
             # 输出
             if epoch % log_freq == 0:
                 print(f"Epoch {epoch}: return = {ep_ret}, length = {ep_len}")
+
+    def print_number_of_params(self):
+        print(f"Policy Network parameters: {count_params(self.pi)}")
+        print(f"Value Network parameteters: {count_params(self.v)}")
 
 
 if __name__ == "__main__":

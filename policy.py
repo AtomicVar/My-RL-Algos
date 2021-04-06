@@ -3,9 +3,28 @@ import torch
 from torch import nn
 from torch.distributions.categorical import Categorical
 from torch.distributions.normal import Normal
+from gym.spaces import Box, Discrete
 
 from utils import mlp
 
+def make_policy_for_env(env, **kwargs):
+    pi_hid = kwargs['pi_hid']
+    pi_l = kwargs['pi_l']
+    if isinstance(env.action_space, Box):
+        pi = GaussianPolicy(
+            obs_dim=env.observation_space.shape[0],
+            act_dim=env.action_space.shape[0],
+            hidden_sizes=[pi_hid] * pi_l,
+        )
+    elif isinstance(env.action_space, Discrete):
+        pi = CategoricalPolicy(
+            obs_dim=env.observation_space.shape[0],
+            act_n=env.action_space.n,
+            hidden_sizes=[pi_hid] * pi_l,
+        )
+    else:
+        raise RuntimeError("Bad Env!")
+    return pi
 
 class GaussianPolicy(nn.Module):
     """

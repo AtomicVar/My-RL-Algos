@@ -3,8 +3,7 @@ class Agent:
         """
         进行 rollouts 轮的模拟，用于查看训练效果
         """
-        total_ret = 0
-        total_len = 0
+        total_ret, total_len = 0, 0
         for rollout in range(rollouts):
             o, ep_ret, ep_len = self.env.reset(), 0, 0
             self.env.render()
@@ -21,5 +20,5 @@ class Agent:
             total_ret += ep_ret
             total_len += ep_len
         print(
-            f">>> Average return={total_ret / rollouts}, average length = {total_len / rollouts}"
+            f">>> Average return = {total_ret / rollouts}, average length = {total_len / rollouts}"
         )

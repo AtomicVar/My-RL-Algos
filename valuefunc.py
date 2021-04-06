@@ -5,7 +5,7 @@ from torch import nn
 from utils import mlp
 
 
-class VF(nn.Module):
+class VNet(nn.Module):
     """
     Value Network (Critic)
     """
