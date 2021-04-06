@@ -1,14 +1,13 @@
 import gym
 import numpy as np
 import torch
-from torch import nn
-from torch.optim import Adam
-from torch.distributions.normal import Normal
-from torch.distributions.categorical import Categorical
 from gym.spaces import Box, Discrete
+from torch.optim import Adam
 
-from utils import mlp, discounted_sum, count_params, normalize
 from agent import Agent
+from policy import CategoricalPolicy, GaussianPolicy
+from utils import count_params, discounted_sum, normalize
+from valuefunc import VF
 
 
 def lossfunc_pi(logp, adv):
@@ -17,80 +16,6 @@ def lossfunc_pi(logp, adv):
 
 def lossfunc_v(val, ret):
     return ((val - ret) ** 2).mean()
-
-
-class GaussianPolicy(nn.Module):
-    """
-    Gaussian Policy Network (Actor) for continuous control
-    """
-
-    def __init__(self, obs_dim, act_dim, hidden_sizes):
-        super().__init__()
-        log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
-        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std))
-        self.mu_net = mlp([obs_dim] + hidden_sizes + [act_dim], nn.Tanh)
-
-    def forward(self, obs, requires_grad=True):
-        if isinstance(obs, np.ndarray):
-            obs = torch.as_tensor(obs, dtype=torch.float32)
-
-        if not requires_grad:
-            with torch.no_grad():
-                mu = self.mu_net(obs)
-                std = torch.exp(self.log_std)
-        else:
-            mu = self.mu_net(obs)
-            std = torch.exp(self.log_std)
-
-        pi = Normal(mu, std)
-        a = pi.sample()
-        return a.numpy(), pi.log_prob(a).sum(axis=-1) # 要把动作每个维度的 log prob 求和（独立假设）
-
-
-class CategoricalPolicy(nn.Module):
-    """
-    Categorical Policy Network (Actor) for discrete control
-    """
-
-    def __init__(self, obs_dim, act_n, hidden_sizes):
-        super().__init__()
-        self.logits_net = mlp([obs_dim] + hidden_sizes + [act_n], nn.Tanh)
-
-    def forward(self, obs, requires_grad=True):
-        """
-        对于当前状态 obs，输出动作 a 以及 log(pi(a|obs))，其中 logprob 包含梯度信息
-        """
-        if isinstance(obs, np.ndarray):
-            obs = torch.as_tensor(obs, dtype=torch.float32)
-
-        if not requires_grad:
-            with torch.no_grad():
-                logits = self.logits_net(obs)
-        else:
-            logits = self.logits_net(obs)
-
-        pi = Categorical(logits=logits)
-        a = pi.sample()
-        return a.numpy(), pi.log_prob(a)
-
-
-class VF(nn.Module):
-    """
-    Value Network (Critic)
-    """
-
-    def __init__(self, obs_dim, hidden_sizes):
-        super().__init__()
-        self.v_net = mlp([obs_dim] + hidden_sizes + [1], nn.Tanh)
-
-    def forward(self, obs):
-        """
-        输入状态 obs，输出 (v_tensor, v_float)，即第二个不带梯度信息，纯浮点数，用于其他地方，如构造 Advantage 函数
-        """
-        if isinstance(obs, np.ndarray):
-            obs = torch.as_tensor(obs, dtype=torch.float32)
-        v = self.v_net(obs)
-        return v, v.detach().numpy().item()
 
 
 class VPG(Agent):
@@ -193,7 +118,7 @@ class VPG(Agent):
                 rew_batch[:-1] + self.gamma * val_batch_float[1:] - val_batch_float[:-1]
             )
             adv_batch = discounted_sum(deltas, self.gamma * self.lam, ret_tensor=True)
-            adv_batch = normalize(adv_batch) # 感觉正则化前后差别不大，不知为何
+            adv_batch = normalize(adv_batch)  # 感觉正则化前后差别不大，不知为何
 
             # 计算 Rt (Reward-to-Go)
             ret_batch = discounted_sum(rew_batch, self.gamma, ret_tensor=True)
@@ -218,7 +143,7 @@ if __name__ == "__main__":
     # 环境
     # env_name = "CartPole-v0" # 离散控制
     # env_name = "Pendulum-v0" # 连续控制，训练较为困难
-    env_name = "MountainCarContinuous-v0" # 连续控制
+    env_name = "MountainCarContinuous-v0"  # 连续控制
 
     # 训练参数
     pi_lr = 3e-4
