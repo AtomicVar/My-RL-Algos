@@ -1,16 +1,14 @@
 import gym
 import numpy as np
-from numpy.lib.arraysetops import isin
-from numpy.testing._private.utils import requires_memory
 import torch
 from torch import nn
-from torch.distributions.utils import logits_to_probs
 from torch.optim import Adam
 from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 from gym.spaces import Box, Discrete
 
 from utils import mlp, discounted_sum, count_params, normalize
+from agent import Agent
 
 
 def lossfunc_pi(logp, adv):
@@ -95,7 +93,7 @@ class VF(nn.Module):
         return v, v.detach().numpy().item()
 
 
-class VPG:
+class VPG(Agent):
     """
     Vanilla Policy Gradient
     
@@ -214,31 +212,6 @@ class VPG:
             # 输出
             if epoch % log_freq == 0:
                 print(f"Epoch {epoch}: return = {ep_ret}, length = {ep_len}")
-
-    def simulate(self, rollouts, max_ep_len):
-        """
-        进行 rollouts 轮的模拟，用于查看训练效果
-        """
-        total_ret = 0
-        total_len = 0
-        for rollout in range(rollouts):
-            o, ep_ret, ep_len = self.env.reset(), 0, 0
-            self.env.render()
-            for t in range(max_ep_len):
-                a, _ = self.pi(o, requires_grad=False)
-                o, r, d, _ = self.env.step(a)
-                self.env.render()
-                ep_ret += r
-                ep_len += 1
-                if d:
-                    break
-            # 打日志
-            print(f"Rollout {rollout}: return = {ep_ret}, length = {ep_len}")
-            total_ret += ep_ret
-            total_len += ep_len
-        print(
-            f">>> Average return={total_ret / rollouts}, average length = {total_len / rollouts}"
-        )
 
 
 if __name__ == "__main__":
