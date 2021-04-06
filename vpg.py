@@ -1,14 +1,24 @@
 import gym
 import numpy as np
+from numpy.lib.arraysetops import isin
 from numpy.testing._private.utils import requires_memory
 import torch
 from torch import nn
 from torch.distributions.utils import logits_to_probs
 from torch.optim import Adam
+from torch.distributions.normal import Normal
 from torch.distributions.categorical import Categorical
 from gym.spaces import Box, Discrete
 
 from utils import mlp, discounted_sum, count_params, normalize
+
+
+def lossfunc_pi(logp, adv):
+    return -(logp * adv).mean()
+
+
+def lossfunc_v(val, ret):
+    return ((val - ret) ** 2).mean()
 
 
 class GaussianPolicy(nn.Module):
@@ -18,7 +28,25 @@ class GaussianPolicy(nn.Module):
 
     def __init__(self, obs_dim, act_dim, hidden_sizes):
         super().__init__()
-        raise NotImplementedError
+        log_std = -0.5 * np.ones(act_dim, dtype=np.float32)
+        self.log_std = torch.nn.Parameter(torch.as_tensor(log_std))
+        self.mu_net = mlp([obs_dim] + hidden_sizes + [act_dim], nn.Tanh)
+
+    def forward(self, obs, requires_grad=True):
+        if isinstance(obs, np.ndarray):
+            obs = torch.as_tensor(obs, dtype=torch.float32)
+
+        if not requires_grad:
+            with torch.no_grad():
+                mu = self.mu_net(obs)
+                std = torch.exp(self.log_std)
+        else:
+            mu = self.mu_net(obs)
+            std = torch.exp(self.log_std)
+
+        pi = Normal(mu, std)
+        a = pi.sample()
+        return a.numpy(), pi.log_prob(a).sum(axis=-1) # 要把动作每个维度的 log prob 求和（独立假设）
 
 
 class CategoricalPolicy(nn.Module):
@@ -37,8 +65,6 @@ class CategoricalPolicy(nn.Module):
         if isinstance(obs, np.ndarray):
             obs = torch.as_tensor(obs, dtype=torch.float32)
 
-        # 如果不需要梯度，仅用于预测，则在 torch.no_grad() 环境中计算，不知这样是否
-        # 会提升性能
         if not requires_grad:
             with torch.no_grad():
                 logits = self.logits_net(obs)
@@ -48,9 +74,6 @@ class CategoricalPolicy(nn.Module):
         pi = Categorical(logits=logits)
         a = pi.sample()
         return a.numpy(), pi.log_prob(a)
-
-    def loss(self, logp, adv):
-        return -(logp * adv).mean()
 
 
 class VF(nn.Module):
@@ -70,9 +93,6 @@ class VF(nn.Module):
             obs = torch.as_tensor(obs, dtype=torch.float32)
         v = self.v_net(obs)
         return v, v.detach().numpy().item()
-    
-    def loss(self, val, ret):
-        return ((val - ret) ** 2).mean()
 
 
 class VPG:
@@ -114,7 +134,11 @@ class VPG:
         self.pi_opt = Adam(self.pi.parameters(), pi_lr)
         self.v_opt = Adam(self.v.parameters(), v_lr)
 
-    def train(self, epochs, max_ep_len, log_cycle):
+        # 输出额外信息
+        print(f"Policy Network parameters: {count_params(self.pi)}")
+        print(f"Value Network parameteters: {count_params(self.v)}")
+
+    def train(self, epochs, max_ep_len, log_freq):
         """
         进行 epochs 轮的训练
         """
@@ -123,7 +147,7 @@ class VPG:
             rew_batch = []  # 用于计算 Rt 以及 At，存放 float
             logp_batch = []  # 带有梯度信息，存放 torch.Tensor
             val_batch = []  # 带有梯度信息的 V(St)，用于优化价值函数以及计算 At，存放 torch.Tensor
-            val_batch_float = [] # 不带梯度信息版的 V(St)
+            val_batch_float = []  # 不带梯度信息版的 V(St)
 
             # 与环境交互
             o, ep_ret, ep_len = self.env.reset(), 0, 0
@@ -167,26 +191,28 @@ class VPG:
             val_batch = torch.stack(val_batch)
 
             # 计算 GAE-Lambda advantage
-            deltas = rew_batch[:-1] + self.gamma * val_batch_float[1:] - val_batch_float[:-1]
+            deltas = (
+                rew_batch[:-1] + self.gamma * val_batch_float[1:] - val_batch_float[:-1]
+            )
             adv_batch = discounted_sum(deltas, self.gamma * self.lam, ret_tensor=True)
-            # adv_batch = normalize(adv_batch)
+            adv_batch = normalize(adv_batch) # 感觉正则化前后差别不大，不知为何
 
             # 计算 Rt (Reward-to-Go)
             ret_batch = discounted_sum(rew_batch, self.gamma, ret_tensor=True)
 
             # 用样本点对策略网络和价值函数进行一次优化
             self.pi_opt.zero_grad()
-            loss_pi = self.pi.loss(logp_batch, adv_batch)
+            loss_pi = lossfunc_pi(logp_batch, adv_batch)
             loss_pi.backward()
             self.pi_opt.step()
 
             self.v_opt.zero_grad()
-            loss_v = self.v.loss(val_batch, ret_batch)
+            loss_v = lossfunc_v(val_batch, ret_batch)
             loss_v.backward()
             self.v_opt.step()
 
             # 输出
-            if epoch % log_cycle == 0:
+            if epoch % log_freq == 0:
                 print(f"Epoch {epoch}: return = {ep_ret}, length = {ep_len}")
 
     def simulate(self, rollouts, max_ep_len):
@@ -217,7 +243,9 @@ class VPG:
 
 if __name__ == "__main__":
     # 环境
-    env_name = "CartPole-v0"
+    # env_name = "CartPole-v0" # 离散控制
+    # env_name = "Pendulum-v0" # 连续控制，训练较为困难
+    env_name = "MountainCarContinuous-v0" # 连续控制
 
     # 训练参数
     pi_lr = 3e-4
@@ -225,7 +253,7 @@ if __name__ == "__main__":
     gamma = 0.99
     lam = 0.97
     max_ep_len = 500
-    train_epochs = 1000
+    train_epochs = 2000
 
     # Actor-Critic 神经网络结构
     pi_hid = 64
@@ -235,7 +263,7 @@ if __name__ == "__main__":
 
     # 其他超参
     sim_rollouts = 5
-    log_cycle = 100  # 每训练 50 轮进行一次输出
+    log_freq = 200  # 每训练 log_freq 轮进行一次输出
 
     # 创建 agent
     agent = VPG(env_name, pi_lr, v_lr, pi_hid, pi_l, v_hid, v_l, gamma, lam)
@@ -244,7 +272,7 @@ if __name__ == "__main__":
     # agent.simulate(sim_rollouts, max_ep_len)
 
     # 训练
-    agent.train(train_epochs, max_ep_len, log_cycle)
+    agent.train(train_epochs, max_ep_len, log_freq)
 
     # 查看仿真效果
     agent.simulate(sim_rollouts, max_ep_len)
