@@ -6,7 +6,7 @@
 
 - [ ] Vanilla Policy Gradient (with GAE-lambda Advantage)
     - [x] 离散控制
-    - [ ] 连续控制
+    - [x] 连续控制
 - [ ] DDPG
 - [ ] TRPO
 - [ ] PPO
